@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+type GeminiTextResponse = {
+  text?: () => string | Promise<string>;
+};
+
+const MODEL_CANDIDATES = [
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
+];
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.GOOGLE_API_KEY;
@@ -25,13 +35,6 @@ export async function POST(request: Request) {
 
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // IMPORTANT: dans cette version du SDK (@google/generative-ai ^0.24.1),
-    // la fonction ListModels n'est pas exposée directement.
-    // Pour éviter de tourner en 404, on utilise un modèle connu pour être souvent supporté.
-    // Le modèle attendu pour le projet est "gemini-2.5-flash".
-    // Si votre compte ne l'a pas, remplacez par le modèle disponible depuis Google AI Studio.
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
     const systemPrompt = `Tu es un conseiller en gestion de patrimoine qui conseille tes clients sur l'univers de la finance, transmission, succession et fiscalité du patrimoine personnel et professionnel. Tes réponses doivent être courtes et claires. Tu te baseras sur des sources officielles telles que impot.gouv et les articles du BOFIP, Code général des impôts.
 
 Ne donne pas de conseil juridique définitif. Présente cela comme une aide à la décision.
@@ -43,25 +46,32 @@ Ajoute toujours à la fin :
     // On injecte donc la consigne dans le message envoyé.
     const combinedPrompt = `${systemPrompt}\n\nQuestion: ${message}`;
 
-    const chat = model.startChat({});
-    const result = await chat.sendMessage(combinedPrompt);
-    const response = result.response;
+    let lastError: unknown = null;
 
-    // Récupère le texte de la réponse de façon robuste (await si nécessaire)
-    let text: string;
-    try {
-      if (response && typeof (response as any).text === "function") {
-        text = await (response as any).text();
-      } else if (typeof result === "string") {
-        text = result;
-      } else {
-        text = JSON.stringify(result);
+    for (const modelName of MODEL_CANDIDATES) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const chat = model.startChat({});
+        const result = await chat.sendMessage(combinedPrompt);
+        const response = result.response;
+        const textResponse = response as GeminiTextResponse | undefined;
+
+        let text: string;
+        if (textResponse && typeof textResponse.text === "function") {
+          text = await textResponse.text();
+        } else if (typeof result === "string") {
+          text = result;
+        } else {
+          text = JSON.stringify(result);
+        }
+
+        return NextResponse.json({ answer: text, model: modelName });
+      } catch (error) {
+        lastError = error;
       }
-    } catch (err) {
-      text = String(err instanceof Error ? err.message : err);
     }
 
-    return NextResponse.json({ answer: text });
+    throw lastError ?? new Error("Aucun modèle Gemini n'a répondu.");
   } catch (error) {
     console.error(error);
 
