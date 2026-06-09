@@ -133,6 +133,65 @@
   margin: 13px 0 5px;
 }
 
+.labelRow {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.labelRow .fieldLabel {
+  margin: 0;
+}
+
+.infoButton {
+  align-items: center;
+  background: var(--ice);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--navy);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: Georgia, serif;
+  font-size: 12px;
+  font-weight: 800;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.infoButton:hover,
+.infoButton[aria-expanded="true"] {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #fff;
+}
+
+.infoPanel {
+  background: #F8FAFE;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  margin-top: 8px;
+  padding: 10px 12px;
+}
+
+.infoPanel strong {
+  color: var(--navy);
+  display: block;
+  margin-bottom: 5px;
+}
+
+.infoPanel ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.infoPanel li {
+  margin-bottom: 4px;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12px;
@@ -558,6 +617,32 @@
   font-weight: 800;
 }
 
+.legalGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.legalBox {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.legalBox h3 {
+  color: var(--navy);
+  font-family: Georgia, serif;
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.legalRef {
+  color: var(--navy);
+  display: inline;
+  font-weight: 800;
+}
+
 .taxLine {
   align-items: baseline;
   border-bottom: 1px solid var(--line);
@@ -625,6 +710,7 @@
   .tripleGrid,
   .recoGrid,
   .detailGrid,
+  .legalGrid,
   .sourceGrid,
   .strategyPicker {
     grid-template-columns: 1fr;

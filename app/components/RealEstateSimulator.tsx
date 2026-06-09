@@ -1,18 +1,20 @@
 "use client";
 
 /* eslint-disable react/no-unescaped-entities */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import css from "./RealEstateSimulator.module.css";
 
-type ResultTab = "synthese" | "strategies" | "fiscalite" | "projection" | "sources";
+type ResultTab = "synthese" | "strategies" | "fiscalite" | "transmission" | "juridique" | "projection" | "sources";
 type Objective = "revenus" | "reduction-ir" | "capitalisation" | "transmission" | "retraite" | "achat-revente" | "reinvestissement";
+type SecondaryObjective = Objective | "aucun";
 type RentalMode = "nue-longue" | "meublee-longue" | "meublee-courte" | "saisonniere";
 type PurchaseSituation = "seul" | "marie" | "pacs" | "fratrie" | "parents-enfants" | "associes";
 type StructureId = "nom-propre" | "sci-ir" | "sci-is" | "sarl-famille" | "sarl-is" | "sas" | "indivision";
 type TaxProfile = "foncier" | "bic" | "is";
 type ExistingRentalNature = "foncier" | "lmnp";
 type ExistingRentalRegime = "micro" | "reel";
+type DetentionHorizon = "moins-30" | "plus-30";
 
 interface FormState {
   revenusFoyer: number;
@@ -25,6 +27,10 @@ interface FormState {
   age: number;
   ageConjoint: number;
   objectif: Objective;
+  objectifSecondaire: SecondaryObjective;
+  enfants: number;
+  donationsAnterieuresInvestisseur: number;
+  donationsAnterieuresConjoint: number;
   valeurBien: number;
   typeBien: string;
   etatBien: "ancien" | "neuf";
@@ -33,7 +39,7 @@ interface FormState {
   loyersMensuels: number;
   vacance: number;
   dureeDetention: number;
-  horizon: "court" | "moyen" | "long";
+  horizon: DetentionHorizon;
   rentalMode: RentalMode;
   meubleClasse: "oui" | "non";
   chargesAnnuelles: number;
@@ -129,10 +135,62 @@ interface FiscalStep {
   total?: boolean;
 }
 
+interface TransmissionStep {
+  label: string;
+  base: string;
+  amount: number;
+  rule: string;
+  total?: boolean;
+}
+
+interface AmortizationBreakdown {
+  notaryFees: number;
+  amortizableNotaryFees: number;
+  landExcluded: number;
+  buildingBase: number;
+  buildingAmortization: number;
+  worksAmortization: number;
+  furnitureAmortization: number;
+  total: number;
+}
+
 interface SourceItem {
   title: string;
   text: string;
   url: string;
+}
+
+interface LegalBlock {
+  title: string;
+  items: string[];
+}
+
+interface TransmissionDonor {
+  label: string;
+  share: number;
+  previousPerChild: number;
+  age: number;
+  bareOwnershipRate: number;
+}
+
+interface TransmissionCalculation {
+  childrenCount: number;
+  assetValue: number;
+  debtDeducted: number;
+  fullOwnershipValue: number;
+  bareOwnershipValue: number;
+  fullOwnershipTaxablePerChild: number;
+  bareOwnershipTaxablePerChild: number;
+  fullOwnershipTaxableTotal: number;
+  bareOwnershipTaxableTotal: number;
+  fullOwnershipDuties: number;
+  bareOwnershipDuties: number;
+  recommendedDuties: number;
+  appliedAbatementPerChild: number;
+  previousPerChild: number;
+  donorSummary: string;
+  abatementSummary: string;
+  steps: TransmissionStep[];
 }
 
 const objectiveLabels: Record<Objective, string> = {
@@ -143,6 +201,11 @@ const objectiveLabels: Record<Objective, string> = {
   retraite: "Préparer la retraite",
   "achat-revente": "Faire de l'achat / revente rapide",
   reinvestissement: "Réinvestissement des bénéfices",
+};
+
+const secondaryObjectiveLabels: Record<SecondaryObjective, string> = {
+  aucun: "Aucun objectif secondaire",
+  ...objectiveLabels,
 };
 
 const rentalModeLabels: Record<RentalMode, string> = {
@@ -171,7 +234,93 @@ const existingRentalRegimeLabels: Record<ExistingRentalRegime, string> = {
   reel: "Réel",
 };
 
+const detentionHorizonLabels: Record<DetentionHorizon, string> = {
+  "moins-30": "Moins de 30 ans",
+  "plus-30": "+30 ans",
+};
+
+const eligibleChargeItems = [
+  "Taxe foncière, hors taxe d'enlèvement des ordures ménagères récupérable sur le locataire.",
+  "Assurance propriétaire non occupant et assurance de l'immeuble.",
+  "Charges de copropriété non récupérables et appels de fonds restant à la charge du bailleur.",
+  "Frais de gestion locative, état des lieux, annonces, honoraires administratifs et logiciels dédiés.",
+  "Entretien, petites réparations, maintenance, diagnostics et contrats obligatoires.",
+  "Frais bancaires liés au compte du projet, hors remboursement du capital du crédit.",
+  "Comptabilité si elle n'est pas déjà intégrée dans les frais estimés de la structure.",
+];
+
+const sarlLegalBlocks: LegalBlock[] = [
+  {
+    title: "Étapes de création d'une SARL immobilière",
+    items: [
+      "Rédiger les statuts : associés, capital, gérance, siège et objet de location meublée (Service-Public création SARL).",
+      "Déposer le capital, signer les statuts et nommer le gérant (Code de commerce SARL).",
+      "Publier l'annonce légale et déclarer les bénéficiaires effectifs (Service-Public annonce légale et bénéficiaires effectifs).",
+      "Immatriculer la société sur le guichet unique, puis ouvrir le compte bancaire définitif (Guichet unique des formalités).",
+    ],
+  },
+  {
+    title: "Conditions à respecter pour la SARL de famille à l'IR",
+    items: [
+      "Associés uniquement en ligne directe, frères et sœurs, conjoints ou partenaires de PACS (CGI art. 239 bis AA).",
+      "Option IR acceptée par tous les associés (CGI art. 239 bis AA).",
+      "Activité commerciale : la location meublée est éligible (CGI art. 34 ; BOI-IS-CHAMP-20-20-10).",
+      "Entrée d'un associé extérieur : fin du régime de famille à l'IR (CGI art. 239 bis AA).",
+    ],
+  },
+  {
+    title: "Points de vigilance et requalification fiscale",
+    items: [
+      "Garder une comptabilité complète : factures, mobilier, amortissements, banque et charges (CGI art. 39 ; BOI-BIC-CHG).",
+      "Ne pas faire payer à la société des dépenses personnelles ou des loyers artificiels (LPF art. L64 ; CGI art. 39).",
+      "Suivre les seuils LMNP/LMP chaque année, associé par associé (BOI-BIC-CHAMP-40-10).",
+      "Formaliser les décisions importantes : achat, emprunt, travaux, cession de parts (Code de commerce SARL).",
+      "Vérifier avant toute entrée d'associé, transformation ou passage à l'IS (CGI art. 239 bis AA ; BOI-IS-CHAMP-20-20-10).",
+    ],
+  },
+];
+
 const sources: SourceItem[] = [
+  {
+    title: "Création d'une société",
+    text: "Statuts, dirigeant, annonce légale, bénéficiaires effectifs et immatriculation via le guichet unique.",
+    url: "https://entreprendre.service-public.fr/vosdroits/F35934",
+  },
+  {
+    title: "SARL de famille - CGI art. 239 bis AA",
+    text: "Option pour le régime fiscal des sociétés de personnes sous conditions familiales et d'activité.",
+    url: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000006309269",
+  },
+  {
+    title: "BOFiP - SARL à caractère familial",
+    text: "Doctrine administrative sur l'option IR, les associés admis et l'éligibilité de la location meublée.",
+    url: "https://bofip.impots.gouv.fr/bofip/4222-PGP.html/identifiant%3DBOI-IS-CHAMP-20-20-10-20180704",
+  },
+  {
+    title: "BOFiP - Frais d'acquisition immobilisés",
+    text: "Traitement des frais accessoires d'acquisition, dont les honoraires de notaire, dans le coût d'acquisition de l'immobilisation.",
+    url: "https://bofip.impots.gouv.fr/bofip/1846-PGP.html/identifiant%3DBOI-BIC-CHG-20-20-10-20190109",
+  },
+  {
+    title: "Donation - Barème ligne directe CGI art. 777",
+    text: "Tarif progressif applicable aux donations entre parents et enfants, après abattement.",
+    url: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000030061736/2026-05-05",
+  },
+  {
+    title: "Donation - Abattement parent/enfant CGI art. 779",
+    text: "Abattement de 100 000 € sur la part de chacun des enfants ou ascendants.",
+    url: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000026292566/2026-02-21",
+  },
+  {
+    title: "Donation - Rappel fiscal CGI art. 784",
+    text: "Prise en compte des donations antérieures de moins de 15 ans pour les abattements et tranches.",
+    url: "https://www.legifrance.gouv.fr/loda/article_lc/LEGIARTI000033809289",
+  },
+  {
+    title: "Démembrement - CGI art. 669",
+    text: "Barème fiscal usufruit / nue-propriété selon l'âge de l'usufruitier.",
+    url: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000006310173/2026-05-10",
+  },
   {
     title: "Régimes d'imposition des locations meublées",
     text: "Seuils micro-BIC 2025/2026, LMNP/LMP, régime réel et amortissements.",
@@ -224,7 +373,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "foncier",
     summary: "Structure civile lisible pour organiser la détention et la transmission, surtout en location nue.",
     creationFees: 1200,
-    accountingFees: 600,
+    accountingFees: 700,
     minDelay: "2 à 4 semaines",
     baseStrengths: ["Parts sociales facilement transmissibles.", "Gouvernance familiale cadrée par les statuts.", "Compatible avec revenus fonciers en location nue."],
     baseWeaknesses: ["Peu adaptée à la location meublée habituelle.", "Imposition directe chez les associés.", "Gestion statutaire à prévoir."],
@@ -236,7 +385,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "is",
     summary: "Pertinente pour amortir l'immeuble, capitaliser les bénéfices et réinvestir dans une logique long terme.",
     creationFees: 1200,
-    accountingFees: 1500,
+    accountingFees: 700,
     minDelay: "3 à 5 semaines",
     baseStrengths: ["Amortissement comptable du bien.", "IS souvent plus doux que l'IR à TMI élevée.", "Bénéfices conservables pour réinvestir."],
     baseWeaknesses: ["Fiscalité de sortie à anticiper.", "Distribution taxée si l'investisseur veut percevoir les revenus.", "Comptabilité obligatoire."],
@@ -248,7 +397,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "bic",
     summary: "Outil familial pour faire du meublé au réel, avec amortissements, lorsque les associés sont membres de la famille.",
     creationFees: 1400,
-    accountingFees: 1300,
+    accountingFees: 700,
     minDelay: "3 à 5 semaines",
     baseStrengths: ["Adaptée aux parents/enfants ou fratries.", "Compatible location meublée et amortissements.", "Option IR intéressante en famille."],
     baseWeaknesses: ["Réservée à un cercle familial éligible.", "Formalités sociales et comptables plus lourdes.", "Moins adaptée à des associés sans lien familial."],
@@ -260,7 +409,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "is",
     summary: "Structure stable pour une activité immobilière organisée avec conservation des bénéfices en société.",
     creationFees: 1400,
-    accountingFees: 1600,
+    accountingFees: 700,
     minDelay: "3 à 5 semaines",
     baseStrengths: ["Cadre adapté à une exploitation structurée.", "IS et amortissements.", "Gestion possible entre associés."],
     baseWeaknesses: ["Distribution taxée.", "Formalisme plus marqué.", "Sortie patrimoniale à préparer."],
@@ -272,7 +421,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "is",
     summary: "Souple pour des associés sans lien familial et des projets de réinvestissement, mais coûteuse pour un simple rendement locatif.",
     creationFees: 1600,
-    accountingFees: 1900,
+    accountingFees: 700,
     minDelay: "3 à 6 semaines",
     baseStrengths: ["Grande souplesse statutaire.", "Adaptée aux associés extérieurs.", "Réinvestissement en société facilité."],
     baseWeaknesses: ["Coûts fixes élevés.", "Peu optimale pour retirer les loyers personnellement.", "Fiscalité de distribution à intégrer."],
@@ -284,7 +433,7 @@ const strategyDefinitions: StrategyDefinition[] = [
     profile: "foncier",
     summary: "Solution rapide pour acheter à plusieurs, mais fragile si le projet doit durer ou organiser une transmission.",
     creationFees: 0,
-    accountingFees: 0,
+    accountingFees: 700,
     minDelay: "Immédiat",
     baseStrengths: ["Aucune société à créer.", "Simple pour une acquisition ponctuelle.", "Adaptée à une revente rapide."],
     baseWeaknesses: ["Décisions parfois bloquantes.", "Sortie d'un indivisaire à anticiper.", "Micro-BIC indisponible en meublé indivis."],
@@ -302,6 +451,10 @@ const defaultForm: FormState = {
   age: 42,
   ageConjoint: 40,
   objectif: "capitalisation",
+  objectifSecondaire: "aucun",
+  enfants: 2,
+  donationsAnterieuresInvestisseur: 0,
+  donationsAnterieuresConjoint: 0,
   valeurBien: 300000,
   typeBien: "appartement",
   etatBien: "ancien",
@@ -310,7 +463,7 @@ const defaultForm: FormState = {
   loyersMensuels: 1600,
   vacance: 5,
   dureeDetention: 12,
-  horizon: "long",
+  horizon: "moins-30",
   rentalMode: "meublee-longue",
   meubleClasse: "non",
   chargesAnnuelles: 5200,
@@ -321,6 +474,8 @@ const defaultForm: FormState = {
   dureeCredit: 20,
   achat: "seul",
 };
+
+const FORM_STORAGE_KEY = "patripro-real-estate-form";
 
 const euro = (value: number) => `${Math.round(value).toLocaleString("fr-FR")} €`;
 const pct = (value: number) => `${value.toFixed(2).replace(".", ",")} %`;
@@ -338,7 +493,66 @@ const hasExistingRealRegime = (form: FormState, nature: ExistingRentalNature) =>
   form.revenusLocatifsExistantsRegime === "reel"
 );
 const isCouplePurchase = (form: FormState) => form.achat === "marie" || form.achat === "pacs";
+const isObjective = (value: unknown): value is Objective => typeof value === "string" && value in objectiveLabels;
+const isSecondaryObjective = (value: unknown): value is SecondaryObjective => value === "aucun" || isObjective(value);
 const rateLabel = (rate: number) => `${(rate * 100).toFixed(Number.isInteger(rate * 100) ? 0 : 1).replace(".", ",")} %`;
+
+function activeObjectives(form: FormState): Objective[] {
+  return form.objectifSecondaire !== "aucun" && form.objectifSecondaire !== form.objectif
+    ? [form.objectif, form.objectifSecondaire]
+    : [form.objectif];
+}
+
+function hasTransmissionObjective(form: FormState): boolean {
+  return activeObjectives(form).includes("transmission");
+}
+
+function normalizeSecondaryObjective(value: unknown, primary: Objective): SecondaryObjective {
+  if (!isSecondaryObjective(value) || value === primary) return "aucun";
+  return value;
+}
+
+function normalizeDetentionHorizon(value: unknown, duration: number): DetentionHorizon {
+  if (value === "moins-30" || value === "plus-30") return value;
+  return duration >= 30 ? "plus-30" : "moins-30";
+}
+
+function normalizeDuration(value: unknown, horizon: DetentionHorizon): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return defaultForm.dureeDetention;
+  if (horizon === "plus-30") return 30;
+  return Math.max(1, Math.min(29, Math.round(parsed)));
+}
+
+function restoreStoredForm(value: unknown): FormState {
+  if (!value || typeof value !== "object") return defaultForm;
+  const stored = value as Partial<FormState>;
+  const rawDuration = Number(stored.dureeDetention);
+  const objectif = isObjective(stored.objectif) ? stored.objectif : defaultForm.objectif;
+  const horizon = normalizeDetentionHorizon(stored.horizon, Number.isFinite(rawDuration) ? rawDuration : defaultForm.dureeDetention);
+  return {
+    ...defaultForm,
+    ...stored,
+    objectif,
+    objectifSecondaire: normalizeSecondaryObjective(stored.objectifSecondaire, objectif),
+    enfants: Math.max(1, Math.round(Number(stored.enfants) || defaultForm.enfants)),
+    donationsAnterieuresInvestisseur: Math.max(0, Number(stored.donationsAnterieuresInvestisseur) || 0),
+    donationsAnterieuresConjoint: Math.max(0, Number(stored.donationsAnterieuresConjoint) || 0),
+    horizon,
+    dureeDetention: normalizeDuration(stored.dureeDetention, horizon),
+  };
+}
+
+function initialForm(): FormState {
+  if (typeof window === "undefined") return defaultForm;
+  try {
+    const stored = window.localStorage.getItem(FORM_STORAGE_KEY);
+    return stored ? restoreStoredForm(JSON.parse(stored)) : defaultForm;
+  } catch {
+    window.localStorage.removeItem(FORM_STORAGE_KEY);
+    return defaultForm;
+  }
+}
 
 const MICRO_FONCIER_THRESHOLD = 15000;
 const MICRO_FONCIER_ABATEMENT = .30;
@@ -356,6 +570,16 @@ const IS_STANDARD_RATE = .25;
 const DISTRIBUTION_IR_RATE = .128;
 const DISTRIBUTION_SOCIAL_RATE = .186;
 const DISTRIBUTION_TOTAL_RATE = DISTRIBUTION_IR_RATE + DISTRIBUTION_SOCIAL_RATE;
+const DIRECT_DONATION_ABATEMENT = 100000;
+const DIRECT_DONATION_BRACKETS: [number, number][] = [
+  [8072, .05],
+  [12109, .10],
+  [15932, .15],
+  [552324, .20],
+  [902838, .30],
+  [1805677, .40],
+  [Infinity, .45],
+];
 
 function taxMainLabel(tax: TaxDetail): string {
   return tax.is > 0 || tax.regime === "Impôt sur les sociétés" ? "IS estimé" : "IR estimé";
@@ -374,6 +598,22 @@ function taxTotalDetail(tax: TaxDetail): string {
   return tax.cotisations > 0
     ? "IR + cotisations sociales estimées"
     : "IR + prélèvements sociaux estimés";
+}
+
+function directDonationDuties(base: number): number {
+  if (base <= 0) return 0;
+  let duties = 0;
+  let previous = 0;
+  for (const [threshold, rate] of DIRECT_DONATION_BRACKETS) {
+    if (base > threshold) {
+      duties += (threshold - previous) * rate;
+      previous = threshold;
+    } else {
+      duties += (base - previous) * rate;
+      break;
+    }
+  }
+  return duties;
 }
 
 function bareOwnershipRate(age: number): number {
@@ -445,13 +685,27 @@ function calcIS(taxable: number): number {
   return reduced * IS_REDUCED_RATE + Math.max(0, base - IS_REDUCED_THRESHOLD) * IS_STANDARD_RATE;
 }
 
-function amortizationPotential(form: FormState, notaryFees: number): number {
+function amortizationBreakdown(form: FormState, notaryFees: number): AmortizationBreakdown {
   const landExcluded = form.valeurBien * .15;
-  const buildingBase = Math.max(0, form.valeurBien - landExcluded + notaryFees * .75);
+  const amortizableNotaryFees = notaryFees * .85;
+  const buildingBase = Math.max(0, form.valeurBien - landExcluded + amortizableNotaryFees);
   const buildingAmortization = buildingBase / 30;
   const worksAmortization = Math.max(0, form.travaux) / 15;
   const furnitureAmortization = isFurnishedMode(form.rentalMode) ? Math.max(0, form.mobilier) / 7 : 0;
-  return buildingAmortization + worksAmortization + furnitureAmortization;
+  return {
+    notaryFees,
+    amortizableNotaryFees,
+    landExcluded,
+    buildingBase,
+    buildingAmortization,
+    worksAmortization,
+    furnitureAmortization,
+    total: buildingAmortization + worksAmortization + furnitureAmortization,
+  };
+}
+
+function amortizationPotential(form: FormState, notaryFees: number): number {
+  return amortizationBreakdown(form, notaryFees).total;
 }
 
 function commonNumbers(form: FormState) {
@@ -603,10 +857,54 @@ function explainObjective(form: FormState, result: StrategyResult): string {
   return result.summary;
 }
 
+function objectiveScoreAdjustment(
+  def: StrategyDefinition,
+  form: FormState,
+  tax: TaxDetail,
+  objective: Objective,
+  familyPurchase: boolean,
+  furnished: boolean,
+): number {
+  let score = 0;
+
+  if (objective === "revenus") {
+    if (def.id === "nom-propre" || def.id === "indivision") score += 10;
+    if (def.profile === "is") score -= 8;
+  }
+  if (objective === "reduction-ir") {
+    if (tax.regime.includes("réel") && tax.amortization > 0) score += 12;
+    if (!furnished && form.travaux > form.valeurBien * .08 && (def.id === "nom-propre" || def.id === "sci-ir")) score += 8;
+  }
+  if (objective === "capitalisation") {
+    if (def.profile === "is") score += 14;
+    if (def.id === "sci-is") score += 5;
+  }
+  if (objective === "transmission") {
+    if (def.id === "sci-ir" || def.id === "sci-is") score += 17;
+    if (def.id === "sarl-famille" && familyPurchase) score += 9;
+    if (def.id === "indivision") score -= 10;
+  }
+  if (objective === "retraite") {
+    if (def.id === "nom-propre" || def.id === "sci-ir" || def.id === "sci-is") score += 8;
+    if (furnished && def.id === "sarl-famille") score += 6;
+  }
+  if (objective === "achat-revente") {
+    if (def.id === "nom-propre" || def.id === "indivision") score += 15;
+    if (def.profile === "is") score -= 12;
+  }
+  if (objective === "reinvestissement") {
+    if (def.profile === "is") score += 16;
+    if (def.id === "sas") score += 5;
+  }
+
+  return score;
+}
+
 function scoreStrategy(def: StrategyDefinition, form: FormState, tax: TaxDetail, annualCashFlow: number): number {
   let score = 55;
   const furnished = isFurnishedMode(form.rentalMode);
   const familyPurchase = form.achat === "fratrie" || form.achat === "parents-enfants" || form.achat === "marie" || form.achat === "pacs";
+  const objectives = activeObjectives(form);
 
   if (annualCashFlow > 0) score += 6;
   if (tax.totalTax < form.loyersMensuels * 12 * .18) score += 5;
@@ -614,42 +912,16 @@ function scoreStrategy(def: StrategyDefinition, form: FormState, tax: TaxDetail,
   if (form.tmi >= 30 && (def.id === "nom-propre" || def.id === "sci-ir") && tax.taxableIncome > 0) score -= 8;
   if (form.tmi >= 41 && def.profile === "is") score += 7;
 
-  if (form.objectif === "revenus") {
-    if (def.id === "nom-propre" || def.id === "indivision") score += 10;
-    if (def.profile === "is") score -= 8;
-  }
-  if (form.objectif === "reduction-ir") {
-    if (tax.regime.includes("réel") && tax.amortization > 0) score += 12;
-    if (!furnished && form.travaux > form.valeurBien * .08 && (def.id === "nom-propre" || def.id === "sci-ir")) score += 8;
-  }
-  if (form.objectif === "capitalisation") {
-    if (def.profile === "is") score += 14;
-    if (def.id === "sci-is") score += 5;
-  }
-  if (form.objectif === "transmission") {
-    if (def.id === "sci-ir" || def.id === "sci-is") score += 17;
-    if (def.id === "sarl-famille" && familyPurchase) score += 9;
-    if (def.id === "indivision") score -= 10;
-  }
-  if (form.objectif === "retraite") {
-    if (def.id === "nom-propre" || def.id === "sci-ir" || def.id === "sci-is") score += 8;
-    if (furnished && def.id === "sarl-famille") score += 6;
-  }
-  if (form.objectif === "achat-revente") {
-    if (def.id === "nom-propre" || def.id === "indivision") score += 15;
-    if (def.profile === "is") score -= 12;
-  }
-  if (form.objectif === "reinvestissement") {
-    if (def.profile === "is") score += 16;
-    if (def.id === "sas") score += 5;
+  score += objectiveScoreAdjustment(def, form, tax, form.objectif, familyPurchase, furnished);
+  if (form.objectifSecondaire !== "aucun" && form.objectifSecondaire !== form.objectif) {
+    score += objectiveScoreAdjustment(def, form, tax, form.objectifSecondaire, familyPurchase, furnished) * .45;
   }
 
   if (furnished && def.id === "sci-ir") score -= 24;
   if (!furnished && def.id === "sarl-famille") score -= 12;
   if (def.id === "sarl-famille" && !familyPurchase) score -= 22;
-  if (def.id === "sas" && form.achat !== "associes" && form.objectif !== "reinvestissement") score -= 8;
-  if (def.id === "indivision" && form.horizon === "long") score -= 10;
-  if (def.profile === "is" && form.horizon === "court") score -= 8;
+  if (def.id === "sas" && form.achat !== "associes" && !objectives.includes("reinvestissement")) score -= 8;
+  if (def.id === "indivision" && form.horizon === "plus-30") score -= 10;
 
   return Math.round(clamp(score, 0, 100));
 }
@@ -750,9 +1022,9 @@ function computeResults(form: FormState): StrategyResult[] {
   }));
 }
 
-function isRelevantForObjective(strategy: StrategyResult, form: FormState): boolean {
+function isRelevantForObjective(strategy: StrategyResult, form: FormState, objective: Objective): boolean {
   const familyPurchase = form.achat === "fratrie" || form.achat === "parents-enfants" || form.achat === "marie" || form.achat === "pacs";
-  switch (form.objectif) {
+  switch (objective) {
     case "revenus":
       return strategy.id === "nom-propre" || strategy.id === "indivision" || strategy.id === "sarl-famille";
     case "reduction-ir":
@@ -771,7 +1043,8 @@ function isRelevantForObjective(strategy: StrategyResult, form: FormState): bool
 }
 
 function strategiesForObjective(results: StrategyResult[], form: FormState): StrategyResult[] {
-  const filtered = results.filter(strategy => isRelevantForObjective(strategy, form));
+  const objectives = activeObjectives(form);
+  const filtered = results.filter(strategy => objectives.some(objective => isRelevantForObjective(strategy, form, objective)));
   const shortlist = (filtered.length > 0 ? filtered : results).slice(0, 3);
   return shortlist.map((strategy, index) => ({
     ...strategy,
@@ -785,7 +1058,7 @@ function projectionTaxRetainedInProject(strategy: StrategyResult): number {
 }
 
 function projectionFor(form: FormState, strategy: StrategyResult): ProjectionRow[] {
-  const years = Math.max(1, Math.min(30, form.dureeDetention));
+  const years = form.horizon === "plus-30" ? 30 : Math.max(1, Math.min(29, form.dureeDetention));
   const rows: ProjectionRow[] = [];
   let cumulativeCash = 0;
   const rent = strategy.annualRent;
@@ -813,6 +1086,7 @@ function fiscalSteps(form: FormState, strategy: StrategyResult): FiscalStep[] {
   const theoreticalRent = form.loyersMensuels * 12;
   const vacancyAmount = theoreticalRent - strategy.annualRent;
   const baseBeforeAmortization = Math.max(0, strategy.annualRent - strategy.annualCharges - strategy.firstYearInterest);
+  const amortizationDetail = amortizationBreakdown(form, strategy.notaryFees);
   const socialAmount = strategy.tax.social + strategy.tax.cotisations;
   const microAbatement = microAbatementRate(strategy.tax);
   const resultStepDetail = microAbatement === null
@@ -855,13 +1129,14 @@ function fiscalSteps(form: FormState, strategy: StrategyResult): FiscalStep[] {
   }
 
   if (strategy.tax.amortization > 0) {
+    const amortizationFormula = `Base avant amortissements : ${euro(baseBeforeAmortization)}. Frais de notaire estimés : ${euro(amortizationDetail.notaryFees)}, dont ${euro(amortizationDetail.amortizableNotaryFees)} intégrés à la base amortissable après exclusion indicative de la part terrain. Amortissement théorique : immeuble ${euro(amortizationDetail.buildingAmortization)} + travaux ${euro(amortizationDetail.worksAmortization)} + mobilier ${euro(amortizationDetail.furnitureAmortization)} = ${euro(amortizationDetail.total)}.`;
     steps.push({
       label: "4. Amortissements fiscaux ou comptables",
       detail: strategy.tax.amortizationDeferred > 0
-        ? `Base avant amortissements : ${euro(baseBeforeAmortization)}. Amortissements utilisés : ${euro(strategy.tax.amortization)}. Reliquat théorique non utilisé : ${euro(strategy.tax.amortizationDeferred)}.`
-        : `Base avant amortissements : ${euro(baseBeforeAmortization)}. Amortissements utilisés : ${euro(strategy.tax.amortization)}.`,
+        ? `${amortizationFormula} Amortissements utilisés : ${euro(strategy.tax.amortization)}. Reliquat théorique non utilisé : ${euro(strategy.tax.amortizationDeferred)}.`
+        : `${amortizationFormula} Amortissements utilisés : ${euro(strategy.tax.amortization)}.`,
       value: euro(strategy.tax.amortization),
-      rule: "L'amortissement est une charge comptable non décaissée : il diminue le résultat imposable sans diminuer la trésorerie réelle.",
+      rule: "L'amortissement est une charge comptable non décaissée : les frais d'acquisition immobilisés suivent la base amortissable du bien, hors quote-part terrain.",
     });
   } else {
     steps.push({
@@ -937,6 +1212,176 @@ function fiscalSteps(form: FormState, strategy: StrategyResult): FiscalStep[] {
   return steps;
 }
 
+function isEntityStrategy(id: StructureId): boolean {
+  return id === "sci-ir" || id === "sci-is" || id === "sarl-famille" || id === "sarl-is" || id === "sas";
+}
+
+function transmissionDonors(form: FormState): TransmissionDonor[] {
+  if (isCouplePurchase(form)) {
+    return [
+      {
+        label: "Investisseur",
+        share: .5,
+        previousPerChild: form.donationsAnterieuresInvestisseur,
+        age: form.age,
+        bareOwnershipRate: bareOwnershipRate(form.age),
+      },
+      {
+        label: "Conjoint / partenaire",
+        share: .5,
+        previousPerChild: form.donationsAnterieuresConjoint,
+        age: form.ageConjoint,
+        bareOwnershipRate: bareOwnershipRate(form.ageConjoint),
+      },
+    ];
+  }
+
+  return [{
+    label: "Investisseur",
+    share: 1,
+    previousPerChild: form.donationsAnterieuresInvestisseur,
+    age: form.age,
+    bareOwnershipRate: bareOwnershipRate(form.age),
+  }];
+}
+
+function donationDutyCalculation(
+  childrenCount: number,
+  donors: TransmissionDonor[],
+  currentValue: (donor: TransmissionDonor) => number,
+) {
+  let appliedAbatementPerChild = 0;
+  let taxablePerChild = 0;
+  let dutiesPerChild = 0;
+  let previousPerChild = 0;
+  const previousParts: string[] = [];
+  const abatementParts: string[] = [];
+
+  donors.filter(donor => donor.share > 0).forEach(donor => {
+    const prior = Math.max(0, donor.previousPerChild);
+    const receivedNow = currentValue(donor) / childrenCount;
+    const remainingAbatement = Math.max(0, DIRECT_DONATION_ABATEMENT - prior);
+    const appliedAbatement = Math.min(receivedNow, remainingAbatement);
+    const currentTaxable = Math.max(0, receivedNow - remainingAbatement);
+    const priorTaxable = Math.max(0, prior - DIRECT_DONATION_ABATEMENT);
+
+    appliedAbatementPerChild += appliedAbatement;
+    taxablePerChild += currentTaxable;
+    dutiesPerChild += directDonationDuties(priorTaxable + currentTaxable) - directDonationDuties(priorTaxable);
+    previousPerChild += prior;
+    previousParts.push(`${donor.label} : ${euro(prior)}`);
+    abatementParts.push(`${donor.label} : ${euro(appliedAbatement)} appliqués sur ${euro(remainingAbatement)} disponibles`);
+  });
+
+  return {
+    appliedAbatementPerChild,
+    taxablePerChild,
+    taxableTotal: taxablePerChild * childrenCount,
+    dutiesTotal: dutiesPerChild * childrenCount,
+    previousPerChild,
+    previousSummary: previousParts.join(" ; "),
+    abatementSummary: abatementParts.join(" ; "),
+  };
+}
+
+function transmissionCalculation(form: FormState, strategy: StrategyResult): TransmissionCalculation {
+  const childrenCount = Math.max(1, Math.round(form.enfants));
+  const furnitureValue = isFurnishedMode(form.rentalMode) ? Math.max(0, form.mobilier) : 0;
+  const assetValue = Math.max(0, form.valeurBien + form.travaux + furnitureValue);
+  const debtDeducted = isEntityStrategy(strategy.id) && form.credit === "oui"
+    ? Math.min(assetValue, Math.max(0, form.montantEmprunte))
+    : 0;
+  const fullOwnershipValue = Math.max(0, assetValue - debtDeducted);
+  const donors = transmissionDonors(form);
+  const donorSummary = donors
+    .map(donor => `${donor.label} : ${Math.round(donor.share * 100)} % x nue-propriété ${Math.round(donor.bareOwnershipRate * 100)} % à ${donor.age} ans`)
+    .join(" ; ");
+
+  const fullOwnership = donationDutyCalculation(childrenCount, donors, donor => fullOwnershipValue * donor.share);
+  const bareOwnership = donationDutyCalculation(childrenCount, donors, donor => fullOwnershipValue * donor.share * donor.bareOwnershipRate);
+  const bareOwnershipValue = donors.reduce((total, donor) => total + fullOwnershipValue * donor.share * donor.bareOwnershipRate, 0);
+
+  const steps: TransmissionStep[] = [
+    {
+      label: "1. Valeur du projet transmis",
+      base: `${euro(form.valeurBien)} de bien + ${euro(form.travaux)} de travaux + ${euro(furnitureValue)} de mobilier retenu`,
+      amount: assetValue,
+      rule: "Valeur patrimoniale indicative avant éventuelle dette portée par une société.",
+    },
+    {
+      label: "2. Base économique retenue",
+      base: debtDeducted > 0
+        ? `${euro(assetValue)} - ${euro(debtDeducted)} de dette retenue car la stratégie active porte sur une société`
+        : "Aucune dette déduite dans cette hypothèse ; en détention directe, la valeur immobilière reste la base de lecture.",
+      amount: fullOwnershipValue,
+      rule: "Pour des parts de société immobilière, la dette peut réduire l'actif net transmis ; à confirmer avec l'acte et la valorisation.",
+    },
+    {
+      label: "3. Valorisation de la nue-propriété",
+      base: donorSummary,
+      amount: bareOwnershipValue,
+      rule: "La nue-propriété est déterminée selon l'âge de l'usufruitier qui conserve l'usufruit (CGI art. 669).",
+    },
+    {
+      label: "4. Part transmise par enfant",
+      base: `${euro(bareOwnershipValue)} / ${childrenCount} enfant(s)`,
+      amount: bareOwnershipValue / childrenCount,
+      rule: "Répartition de la nue-propriété avant abattements.",
+    },
+    {
+      label: "5. Donations antérieures",
+      base: `${bareOwnership.previousSummary} par enfant`,
+      amount: bareOwnership.previousPerChild,
+      rule: "Les donations de moins de 15 ans consomment les abattements et les tranches déjà utilisées (CGI art. 784).",
+    },
+    {
+      label: "6. Abattements disponibles",
+      base: bareOwnership.abatementSummary,
+      amount: bareOwnership.appliedAbatementPerChild,
+      rule: "Abattement de 100 000 € par parent et par enfant, diminué des donations antérieures (CGI art. 779).",
+    },
+    {
+      label: "7. Base taxable par enfant",
+      base: "Valeur reçue par enfant - abattements disponibles",
+      amount: bareOwnership.taxablePerChild,
+      rule: "Base soumise au barème progressif des donations.",
+    },
+    {
+      label: "8. Base taxable totale",
+      base: `${euro(bareOwnership.taxablePerChild)} x ${childrenCount} enfant(s)`,
+      amount: bareOwnership.taxableTotal,
+      rule: "Base taxable totale de la transmission démembrée simulée.",
+    },
+    {
+      label: "9. Droits de transmission estimés",
+      base: "Application du barème ligne directe par donateur et par enfant",
+      amount: bareOwnership.dutiesTotal,
+      rule: "Droits dus sur la nouvelle donation selon le barème de l'article 777 du CGI.",
+      total: true,
+    },
+  ];
+
+  return {
+    childrenCount,
+    assetValue,
+    debtDeducted,
+    fullOwnershipValue,
+    bareOwnershipValue,
+    fullOwnershipTaxablePerChild: fullOwnership.taxablePerChild,
+    bareOwnershipTaxablePerChild: bareOwnership.taxablePerChild,
+    fullOwnershipTaxableTotal: fullOwnership.taxableTotal,
+    bareOwnershipTaxableTotal: bareOwnership.taxableTotal,
+    fullOwnershipDuties: fullOwnership.dutiesTotal,
+    bareOwnershipDuties: bareOwnership.dutiesTotal,
+    recommendedDuties: bareOwnership.dutiesTotal,
+    appliedAbatementPerChild: bareOwnership.appliedAbatementPerChild,
+    previousPerChild: bareOwnership.previousPerChild,
+    donorSummary,
+    abatementSummary: bareOwnership.abatementSummary,
+    steps,
+  };
+}
+
 function objectiveNeedText(form: FormState): string {
   switch (form.objectif) {
     case "revenus":
@@ -969,7 +1414,7 @@ function buildNeedsSummary(form: FormState): NeedSummaryItem[] {
     {
       title: "Besoin patrimonial principal",
       text: objectiveNeedText(form),
-      detail: `Objectif sélectionné : ${objectiveLabels[form.objectif]}.`,
+      detail: `Objectif principal : ${objectiveLabels[form.objectif]}. Objectif secondaire : ${secondaryObjectiveLabels[form.objectifSecondaire]}.`,
     },
     {
       title: "Mode d'exploitation locative",
@@ -1007,12 +1452,12 @@ function buildNeedsSummary(form: FormState): NeedSummaryItem[] {
     },
     {
       title: "Horizon de détention",
-      text: form.horizon === "court"
-        ? "L'horizon court appelle une solution souple et peu coûteuse à sortir."
-        : form.horizon === "moyen"
-          ? "L'horizon moyen nécessite un équilibre entre fiscalité annuelle, coûts de structure et simplicité de revente."
-          : "L'horizon long permet d'arbitrer en faveur de la capitalisation, de la transmission et de la gouvernance.",
-      detail: `Durée renseignée : ${form.dureeDetention} an(s).`,
+      text: form.horizon === "plus-30"
+        ? "Un horizon supérieur à 30 ans permet de privilégier la capitalisation, la transmission et la gouvernance long terme."
+        : "Un horizon inférieur à 30 ans nécessite un équilibre entre fiscalité annuelle, coûts de structure, financement et simplicité de sortie.",
+      detail: form.horizon === "plus-30"
+        ? "Durée renseignée : +30 ans. La projection reste limitée à 30 ans pour garder un tableau lisible."
+        : `Durée renseignée : ${form.dureeDetention} an(s).`,
     },
   ];
 
@@ -1057,10 +1502,23 @@ function TaxLine({ label, detail, value }: { label: string; detail: string; valu
   );
 }
 
+function LegalItemText({ text }: { text: string }) {
+  const match = text.match(/^(.*?)(\s*\((?:CGI|BOI|LPF|Code de commerce|Service-Public|Guichet unique)[^)]+\)\.?)$/);
+  if (!match) return text;
+
+  return (
+    <>
+      {match[1]}
+      <strong className={css.legalRef}>{match[2].trim()}</strong>
+    </>
+  );
+}
+
 export default function RealEstateSimulator() {
-  const [form, setForm] = useState<FormState>(defaultForm);
+  const [form, setForm] = useState<FormState>(initialForm);
   const [hasRun, setHasRun] = useState(false);
   const [activeTab, setActiveTab] = useState<ResultTab>("synthese");
+  const [chargesHelpOpen, setChargesHelpOpen] = useState(false);
   const results = useMemo(() => computeResults(form), [form]);
   const objectiveStrategies = useMemo(() => strategiesForObjective(results, form), [results, form]);
   const [selectedId, setSelectedId] = useState<StructureId>("sci-is");
@@ -1068,6 +1526,8 @@ export default function RealEstateSimulator() {
   const selected = objectiveStrategies.find(result => result.id === selectedId) ?? recommended;
   const projection = projectionFor(form, selected);
   const partnerInProject = isCouplePurchase(form);
+  const transmissionObjective = hasTransmissionObjective(form);
+  const transmission = transmissionCalculation(form, selected);
   const partnerDismembermentRates = dismembermentRates(form.ageConjoint);
   const projectNumbers = commonNumbers(form);
   const totalAcquisition = projectNumbers.totalProjectCost;
@@ -1078,6 +1538,20 @@ export default function RealEstateSimulator() {
   const relevantExistingIncomeAnnual = projectIsFurnished ? existingFurnishedIncomeAnnual(form) : existingFoncierIncomeAnnual(form);
   const needsSummary = buildNeedsSummary(form);
   const selectedFiscalSteps = fiscalSteps(form, selected);
+  const visibleActiveTab: ResultTab = activeTab === "transmission" && !transmissionObjective ? "synthese" : activeTab;
+  const tabItems: { id: ResultTab; label: string }[] = [
+    { id: "synthese", label: "1 Synthèse" },
+    { id: "strategies", label: "2 Stratégies" },
+    { id: "fiscalite", label: "3 Fiscalité" },
+    ...(transmissionObjective ? [{ id: "transmission" as ResultTab, label: "4 Transmission" }] : []),
+    { id: "juridique", label: `${transmissionObjective ? 5 : 4} Juridique` },
+    { id: "projection", label: `${transmissionObjective ? 6 : 5} Projection` },
+    { id: "sources", label: `${transmissionObjective ? 7 : 6} Sources` },
+  ];
+
+  useEffect(() => {
+    window.localStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(form));
+  }, [form]);
 
   function setField<K extends keyof FormState>(key: K) {
     return (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -1092,6 +1566,38 @@ export default function RealEstateSimulator() {
 
   function setValue<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm(prev => ({ ...prev, [key]: value }));
+  }
+
+  function setPrimaryObjective(event: React.ChangeEvent<HTMLSelectElement>) {
+    const objectif = event.target.value as Objective;
+    setForm(prev => ({
+      ...prev,
+      objectif,
+      objectifSecondaire: prev.objectifSecondaire === objectif ? "aucun" : prev.objectifSecondaire,
+    }));
+  }
+
+  function setSecondaryObjective(event: React.ChangeEvent<HTMLSelectElement>) {
+    const objectifSecondaire = normalizeSecondaryObjective(event.target.value, form.objectif);
+    setForm(prev => ({ ...prev, objectifSecondaire }));
+  }
+
+  function setDetentionHorizon(value: DetentionHorizon) {
+    setForm(prev => ({
+      ...prev,
+      horizon: value,
+      dureeDetention: value === "plus-30" ? 30 : normalizeDuration(prev.dureeDetention, "moins-30"),
+    }));
+  }
+
+  function setDetentionDuration(event: React.ChangeEvent<HTMLInputElement>) {
+    const duration = normalizeDuration(event.target.value, "moins-30");
+    setForm(prev => ({ ...prev, dureeDetention: duration }));
+  }
+
+  function resetForm() {
+    window.localStorage.removeItem(FORM_STORAGE_KEY);
+    setForm(defaultForm);
   }
 
   function run() {
@@ -1179,13 +1685,35 @@ export default function RealEstateSimulator() {
                 </>
               )}
               <label className={css.fieldLabel}>Objectif patrimonial principal</label>
-              <select className={css.selectInput} value={form.objectif} onChange={setField("objectif")}>
+              <select className={css.selectInput} value={form.objectif} onChange={setPrimaryObjective}>
                 {Object.entries(objectiveLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <label className={css.fieldLabel}>Objectif patrimonial secondaire</label>
+              <select className={css.selectInput} value={form.objectifSecondaire} onChange={setSecondaryObjective}>
+                <option value="aucun">Aucun</option>
+                {Object.entries(objectiveLabels)
+                  .filter(([value]) => value !== form.objectif)
+                  .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
               <label className={css.fieldLabel}>Situation d'achat</label>
               <select className={css.selectInput} value={form.achat} onChange={setField("achat")}>
                 {Object.entries(purchaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
+              {transmissionObjective && (
+                <>
+                  <label className={css.fieldLabel}>Nombre d'enfants concernés par la transmission</label>
+                  <input className={css.textInput} type="number" min={1} max={12} step={1} value={form.enfants} onChange={setField("enfants")} />
+                  <label className={css.fieldLabel}>Donations antérieures de moins de 15 ans par investisseur, par enfant €</label>
+                  <input className={css.textInput} type="number" min={0} step={1000} value={form.donationsAnterieuresInvestisseur} onChange={setField("donationsAnterieuresInvestisseur")} />
+                  {partnerInProject && (
+                    <>
+                      <label className={css.fieldLabel}>Donations antérieures de moins de 15 ans par conjoint/partenaire, par enfant €</label>
+                      <input className={css.textInput} type="number" min={0} step={1000} value={form.donationsAnterieuresConjoint} onChange={setField("donationsAnterieuresConjoint")} />
+                    </>
+                  )}
+                  <p className={css.hint}>Ces montants consomment les abattements disponibles et les tranches du barème pour les donations de moins de 15 ans.</p>
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -1231,16 +1759,39 @@ export default function RealEstateSimulator() {
               <input className={css.textInput} type="number" min={0} step={100} value={form.loyersMensuels} onChange={setField("loyersMensuels")} />
               <label className={css.fieldLabel}>Vacance locative estimée (%)</label>
               <input className={css.textInput} type="number" min={0} max={100} step={1} value={form.vacance} onChange={setField("vacance")} />
-              <label className={css.fieldLabel}>Charges annuelles hors crédit €</label>
+              <div className={css.labelRow}>
+                <label className={css.fieldLabel}>Charges annuelles hors crédit €</label>
+                <button
+                  type="button"
+                  className={css.infoButton}
+                  aria-expanded={chargesHelpOpen}
+                  aria-label="Afficher les charges éligibles"
+                  onClick={() => setChargesHelpOpen(open => !open)}
+                >
+                  i
+                </button>
+              </div>
               <input className={css.textInput} type="number" min={0} step={500} value={form.chargesAnnuelles} onChange={setField("chargesAnnuelles")} />
-              <p className={css.hint}>Inclure taxe foncière, assurance PNO, copropriété non récupérable, gestion, entretien courant.</p>
+              {chargesHelpOpen && (
+                <div className={css.infoPanel}>
+                  <strong>Charges à renseigner</strong>
+                  <ul>
+                    {eligibleChargeItems.map(item => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              )}
               <label className={css.fieldLabel}>Durée de détention envisagée</label>
-              <select className={css.selectInput} value={form.horizon} onChange={setField("horizon")}>
-                <option value="court">Court terme : achat / revente rapide</option>
-                <option value="moyen">Moyen terme : 5 à 10 ans</option>
-                <option value="long">Long terme : plus de 10 ans</option>
+              <select className={css.selectInput} value={form.horizon} onChange={event => setDetentionHorizon(event.target.value as DetentionHorizon)}>
+                {Object.entries(detentionHorizonLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
-              <input className={css.textInput} type="number" min={1} max={30} step={1} value={form.dureeDetention} onChange={setField("dureeDetention")} />
+              {form.horizon === "moins-30" ? (
+                <>
+                  <label className={css.fieldLabel}>Durée précise retenue pour la projection</label>
+                  <input className={css.textInput} type="number" min={1} max={29} step={1} value={form.dureeDetention} onChange={setDetentionDuration} />
+                </>
+              ) : (
+                <p className={css.hint}>La projection reste limitée à 30 ans, même si l'horizon patrimonial est supérieur.</p>
+              )}
             </div>
           </div>
         </section>
@@ -1271,27 +1822,21 @@ export default function RealEstateSimulator() {
 
           <div className={css.cta}>
             <button type="button" className={css.btnPrimary} onClick={run}>Analyser le projet immobilier</button>
-            <button type="button" className={css.btnSecondary} onClick={() => setForm(defaultForm)}>Réinitialiser</button>
+            <button type="button" className={css.btnSecondary} onClick={resetForm}>Réinitialiser</button>
           </div>
         </section>
 
         {hasRun && (
           <>
             <div className={css.tabs}>
-              {([
-                ["synthese", "1 Synthèse"],
-                ["strategies", "2 Stratégies"],
-                ["fiscalite", "3 Fiscalité"],
-                ["projection", "4 Projection"],
-                ["sources", "5 Sources"],
-              ] as [ResultTab, string][]).map(([tab, label]) => (
-                <button key={tab} type="button" className={`${css.tab} ${activeTab === tab ? css.tabOn : ""}`} onClick={() => setActiveTab(tab)}>
-                  {label}
+              {tabItems.map(tab => (
+                <button key={tab.id} type="button" className={`${css.tab} ${visibleActiveTab === tab.id ? css.tabOn : ""}`} onClick={() => setActiveTab(tab.id)}>
+                  {tab.label}
                 </button>
               ))}
             </div>
 
-            <section className={`${css.tabpane} ${activeTab === "synthese" ? css.tabpaneOn : ""}`}>
+            <section className={`${css.tabpane} ${visibleActiveTab === "synthese" ? css.tabpaneOn : ""}`}>
               <div className={css.card}>
                 <h2 className={css.cardH2}><span className={css.secNum}>A</span>Synthèse des besoins</h2>
                 <p className={css.sub}>Lecture du projet à partir des informations saisies. Les structures juridiques sont comparées dans l'onglet 2.</p>
@@ -1312,6 +1857,7 @@ export default function RealEstateSimulator() {
                   <TaxLine label="Loyers annuels projetés" detail="Loyers mensuels x 12, après vacance locative" value={euro(projectNumbers.annualRent)} />
                   <TaxLine label="Rendement brut du projet" detail="Loyers annuels / coût d'acquisition estimé" value={pct(projectGrossYield)} />
                   <TaxLine label="Trésorerie avant fiscalité" detail="Loyers - charges - crédit, hors impôt et hors amortissements" value={euro(preTaxCashFlow)} />
+                  <TaxLine label="Frais de notaire estimés" detail={form.etatBien === "neuf" ? "Hypothèse 2,5 % du prix du bien neuf" : "Hypothèse 7,5 % du prix du bien ancien"} value={euro(projectNumbers.notaryFees)} />
                   <TaxLine label="Coût d'acquisition estimé" detail="Prix, travaux, mobilier et frais notariés indicatifs" value={euro(totalAcquisition)} />
                   {form.credit === "oui" && (
                     <TaxLine label="Crédit bancaire" detail={`Coût total du crédit : ${euro(projectNumbers.creditCost)}`} value={euro(projectNumbers.payment)} />
@@ -1334,8 +1880,12 @@ export default function RealEstateSimulator() {
               </div>
             </section>
 
-            <section className={`${css.tabpane} ${activeTab === "strategies" ? css.tabpaneOn : ""}`}>
-              <p className={css.sub}>Stratégies filtrées selon l'objectif sélectionné : <b>{objectiveLabels[form.objectif]}</b>. Trois options maximum sont affichées.</p>
+            <section className={`${css.tabpane} ${visibleActiveTab === "strategies" ? css.tabpaneOn : ""}`}>
+              <p className={css.sub}>
+                Stratégies filtrées selon l'objectif principal : <b>{objectiveLabels[form.objectif]}</b>
+                {form.objectifSecondaire !== "aucun" && <> ; objectif secondaire : <b>{secondaryObjectiveLabels[form.objectifSecondaire]}</b></>}.
+                Trois options maximum sont affichées.
+              </p>
               <div className={css.strategyPicker}>
                 {objectiveStrategies.map(strategy => (
                   <button
@@ -1381,7 +1931,7 @@ export default function RealEstateSimulator() {
               </div>
             </section>
 
-            <section className={`${css.tabpane} ${activeTab === "fiscalite" ? css.tabpaneOn : ""}`}>
+            <section className={`${css.tabpane} ${visibleActiveTab === "fiscalite" ? css.tabpaneOn : ""}`}>
               <div className={css.card}>
                 <h2 className={css.cardH2}><span className={css.secNum}>B</span>Calcul fiscal pas à pas</h2>
                 <p className={css.sub}>Stratégie active : <b>{selected.title}</b>. Les montants sont des estimations annuelles de première année.</p>
@@ -1410,9 +1960,85 @@ export default function RealEstateSimulator() {
               </div>
             </section>
 
-            <section className={`${css.tabpane} ${activeTab === "projection" ? css.tabpaneOn : ""}`}>
+            {transmissionObjective && (
+              <section className={`${css.tabpane} ${visibleActiveTab === "transmission" ? css.tabpaneOn : ""}`}>
+                <div className={css.card}>
+                  <h2 className={css.cardH2}><span className={css.secNum}>C</span>Transmission familiale</h2>
+                  <p className={css.sub}>
+                    Stratégie active : <b>{selected.title}</b>. Hypothèse pédagogique : donation de la nue-propriété aux enfants avec conservation de l'usufruit par le ou les parents.
+                  </p>
+                  <div className={css.tripleGrid}>
+                    <TaxLine label="Valeur économique retenue" detail={transmission.debtDeducted > 0 ? "Actif immobilier diminué de la dette retenue pour la structure" : "Valeur du bien, travaux et mobilier retenu"} value={euro(transmission.fullOwnershipValue)} />
+                    <TaxLine label="Valeur taxable en nue-propriété" detail={transmission.donorSummary} value={euro(transmission.bareOwnershipValue)} />
+                    <TaxLine label="Droits de transmission estimés" detail={`Pour ${transmission.childrenCount} enfant(s), après abattements et rappel fiscal`} value={euro(transmission.recommendedDuties)} />
+                    <TaxLine label="Comparaison pleine propriété" detail="Droits estimés si la pleine propriété était donnée immédiatement" value={euro(transmission.fullOwnershipDuties)} />
+                    <TaxLine label="Base taxable nue-propriété" detail="Total après donations antérieures et abattements disponibles" value={euro(transmission.bareOwnershipTaxableTotal)} />
+                    <TaxLine label="Abattement appliqué par enfant" detail={transmission.abatementSummary} value={euro(transmission.appliedAbatementPerChild)} />
+                  </div>
+                </div>
+
+                <div className={css.card}>
+                  <h2 className={css.cardH2}><span className={css.secNum}>D</span>Calcul des droits pas à pas</h2>
+                  <p className={css.sub}>Les donations antérieures sont saisies par enfant et par donateur. Si l'historique varie selon les enfants, le chiffrage doit être individualisé.</p>
+                  <div className={css.tableWrap}>
+                    <table className={css.calcTable}>
+                      <thead>
+                        <tr>
+                          <th>Étape</th>
+                          <th>Calcul / assiette</th>
+                          <th>Montant retenu</th>
+                          <th>Règle mobilisée</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {transmission.steps.map(step => (
+                          <tr key={step.label} className={step.total ? css.trTotal : undefined}>
+                            <td>{step.label}</td>
+                            <td>{step.base}</td>
+                            <td className={css.tdNum}>{euro(step.amount)}</td>
+                            <td>{step.rule}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            <section className={`${css.tabpane} ${visibleActiveTab === "juridique" ? css.tabpaneOn : ""}`}>
               <div className={css.card}>
-                <h2 className={css.cardH2}><span className={css.secNum}>C</span>Projection annuelle</h2>
+                <h2 className={css.cardH2}><span className={css.secNum}>{transmissionObjective ? "E" : "C"}</span>Création et sécurisation juridique</h2>
+                <p className={css.sub}>
+                  Stratégie active : <b>{selected.title}</b>. Cet onglet détaille surtout les points à sécuriser lorsqu'une SARL, notamment une SARL de famille à l'IR, est retenue pour porter le projet.
+                </p>
+                <div className={css.legalGrid}>
+                  {sarlLegalBlocks.map(block => (
+                    <section key={block.title} className={css.legalBox}>
+                      <h3>{block.title}</h3>
+                      <ul className={css.list}>{block.items.map(item => <li key={item}><LegalItemText text={item} /></li>)}</ul>
+                    </section>
+                  ))}
+                </div>
+              </div>
+
+              <div className={css.card}>
+                <h2 className={css.cardH2}><span className={css.secNum}>{transmissionObjective ? "F" : "D"}</span>Textes de référence</h2>
+                <div className={css.sourceGrid}>
+                  {sources.slice(0, 3).map(source => (
+                    <article key={source.url} className={css.sourceCard}>
+                      <h3>{source.title}</h3>
+                      <p>{source.text}</p>
+                      <a href={source.url} target="_blank" rel="noreferrer">Ouvrir la source officielle</a>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className={`${css.tabpane} ${visibleActiveTab === "projection" ? css.tabpaneOn : ""}`}>
+              <div className={css.card}>
+                <h2 className={css.cardH2}><span className={css.secNum}>{transmissionObjective ? "G" : "E"}</span>Projection annuelle</h2>
                 <p className={css.sub}>Hypothèse pédagogique : les loyers restent constants ; seule la valeur du bien reste projetée à +1 %/an pour le patrimoine net. La trésorerie est cumulée comme si elle restait dans le projet, sans transfert vers les comptes personnels ; en IR, l'impôt est retranché virtuellement, et en IS la fiscalité de distribution est exclue.</p>
                 <div className={css.tableWrap}>
                   <table className={css.table}>
@@ -1443,9 +2069,9 @@ export default function RealEstateSimulator() {
               </div>
             </section>
 
-            <section className={`${css.tabpane} ${activeTab === "sources" ? css.tabpaneOn : ""}`}>
+            <section className={`${css.tabpane} ${visibleActiveTab === "sources" ? css.tabpaneOn : ""}`}>
               <div className={css.card}>
-                <h2 className={css.cardH2}><span className={css.secNum}>D</span>Sources fiscales utilisées</h2>
+                <h2 className={css.cardH2}><span className={css.secNum}>{transmissionObjective ? "H" : "F"}</span>Sources fiscales utilisées</h2>
                 <p className={css.sub}>Liens officiels utilisés pour les principaux paramètres du moteur. Les frais et projections restent des hypothèses indicatives à adapter au dossier.</p>
                 <div className={css.sourceGrid}>
                   {sources.map(source => (
