@@ -21,7 +21,7 @@ export default function HomePage() {
       maxWidth: "1080px",
       margin: "0 auto",
       display: "flex",
-      justifyContent: "space-between",
+      justifyContent: "flex-start",
       alignItems: "center",
     } as React.CSSProperties,
     logo: {
@@ -66,6 +66,32 @@ export default function HomePage() {
       marginLeft: "auto",
       marginRight: "auto",
     },
+    simulatorsSection: {
+      background: "#FFFFFF",
+      border: "1px solid #E1E6F0",
+      borderRadius: "8px",
+      padding: "24px",
+      marginBottom: "28px",
+      boxShadow: "0 10px 28px rgba(30, 39, 97, 0.08)",
+    },
+    simulatorsTitle: {
+      margin: "0 0 16px",
+      fontFamily: "Georgia, serif",
+      fontSize: "22px",
+      fontWeight: 700,
+      color: "#1E2761",
+    },
+    simulatorsIntro: {
+      margin: "0 0 18px",
+      color: "#5A6478",
+      fontSize: "15px",
+    },
+    simulatorsActions: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "12px",
+      alignItems: "center",
+    } as React.CSSProperties,
   };
 
   return (
@@ -73,19 +99,7 @@ export default function HomePage() {
       {/* HEADER */}
       <header style={styles.header}>
         <div style={styles.headerContent}>
-          <p style={styles.logo}>PatriPro, l'outil préféré de Mr TUNICA</p>
-          <a
-            href="/simulateur"
-            style={styles.simulatorBtn}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "#B8931F";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "#C9A227";
-            }}
-          >
-            Lancer le simulateur
-          </a>
+          <p style={styles.logo}>PatriPro, l&apos;outil préféré de Mr TUNICA</p>
         </div>
       </header>
 
@@ -94,9 +108,42 @@ export default function HomePage() {
         <div style={styles.hero}>
           <h1 style={styles.title}>Transmission du patrimoine professionnel</h1>
           <p style={styles.subtitle}>
-            Analysez les meilleures stratégies avec l'assistant IA spécialisé en droit fiscal et patrimonial.
+            Analysez les meilleures stratégies avec l&apos;assistant IA spécialisé en droit fiscal et patrimonial.
           </p>
         </div>
+
+        <section style={styles.simulatorsSection} aria-labelledby="simulators-title">
+          <h2 id="simulators-title" style={styles.simulatorsTitle}>Nos simulateurs patrimoniales</h2>
+          <p style={styles.simulatorsIntro}>
+            Accédez aux outils de calcul et d&apos;aide à la décision patrimoniale.
+          </p>
+          <div style={styles.simulatorsActions}>
+            <a
+              href="/simulateur"
+              style={styles.simulatorBtn}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#B8931F";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#C9A227";
+              }}
+            >
+              Simulateur Fiscalité Professionnelle
+            </a>
+            <a
+              href="/simulateur-investissement-immobilier"
+              style={styles.simulatorBtn}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#B8931F";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "#C9A227";
+              }}
+            >
+              Simulateur Investissement Immobilier
+            </a>
+          </div>
+        </section>
 
         {/* CHATBOX */}
         <ChatClient />

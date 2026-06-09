@@ -2,17 +2,17 @@ import type { Metadata } from "next";
 import Simulator from "../components/Simulator";
 
 export const metadata: Metadata = {
-  title: "Simulateur — Transmission & cession — PatriPro",
+  title: "Plateforme de transmission professionnelle — PatriPro",
   description:
-    "Outil interactif d'aide à la décision pour la transmission et la cession d'entreprise — comparez trois scénarios (transmission, cession, mixte).",
+    "Dossier dirigeant interactif pour comparer les scénarios de transmission, les analyses fiscales et juridiques, les sources et le rapport client.",
   robots: {
     index: true,
     follow: true,
   },
   openGraph: {
-    title: "Simulateur — Transmission & cession — PatriPro",
+    title: "Plateforme de transmission professionnelle — PatriPro",
     description:
-      "Outil interactif d'aide à la décision pour la transmission et la cession d'entreprise — comparez trois scénarios (transmission, cession, mixte).",
+      "Dossier dirigeant interactif pour comparer les scénarios de transmission, les analyses fiscales et juridiques, les sources et le rapport client.",
     locale: "fr_FR",
   },
 };
